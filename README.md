@@ -51,15 +51,10 @@ input/output format. For required fields and shapes, just follow the `WebSocket 
 export POLICY_CHECKPOINT_PATH=/abs/path/to/checkpoint_dir
 ```
 
-## 5. Optional Policy-Specific Variables
-
-Set policy-specific variables only when your server implementation requires them.
-
-OpenPI example:
-
+## 5. Sample Openpi Variables
 ```bash
-export POLICY_CONFIG_NAME=<openpi_config_name>
-export POLICY_PYTORCH_DEVICE=cuda
+export POLICY_CHECKPOINT_PATH=/abs/path/to/pi05_hsr_task6891011_level12_v2.5_train_adaptive/pi05_hsr_task6891011_level12_v2.5_train_adaptive_gpu8/200000/
+export POLICY_CONFIG_NAME=pi05_hsr_task6891011_level12_v2.5_train_adaptive
 ```
 
 ## 6. Test Flow
