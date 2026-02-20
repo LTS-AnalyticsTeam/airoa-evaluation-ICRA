@@ -9,17 +9,12 @@ services:
     environment:
       POLICY_SERVER_HOST: "0.0.0.0"
       POLICY_SERVER_PORT: ${POLICY_SERVER_PORT:-8000}
-      POLICY_CONFIG_NAME: ${POLICY_CONFIG_NAME:-}
       POLICY_CHECKPOINT_DIR: /policy_checkpoint
-      POLICY_DEFAULT_PROMPT: ${POLICY_DEFAULT_PROMPT:-}
-      POLICY_RECORD_DIR: ${POLICY_RECORD_DIR:-}
-      POLICY_PYTORCH_DEVICE: ${POLICY_PYTORCH_DEVICE:-}
       POLICY_DATA_HOME: /policy_assets
-      OPENPI_DATA_HOME: /policy_assets
       HF_HOME: /policy_hf_cache
     volumes:
       - ${POLICY_CHECKPOINT_PATH:-./.docker_cache/policy_checkpoint}:/policy_checkpoint:ro
-      - ${POLICY_CACHE_DIR:-${OPENPI_CACHE_DIR:-./.docker_cache/policy_cache}}:/policy_assets
+      - ${POLICY_CACHE_DIR:-./.docker_cache/policy_cache}:/policy_assets
       - ${HF_CACHE_DIR:-./.docker_cache/hf}:/policy_hf_cache
     restart: unless-stopped
 

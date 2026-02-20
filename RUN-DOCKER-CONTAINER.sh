@@ -104,13 +104,12 @@ ensure_ros_ip() {
 }
 
 ensure_paths() {
-  : "${POLICY_CACHE_DIR:=${OPENPI_CACHE_DIR:-${PWD}/.docker_cache/policy_cache}}"
+  : "${POLICY_CACHE_DIR:=${PWD}/.docker_cache/policy_cache}"
   : "${HF_CACHE_DIR:=${PWD}/.docker_cache/hf}"
   : "${ROSBAG_DIR:=${PWD}/datasets/rosbags}"
   : "${POLICY_CHECKPOINT_PATH:?Set POLICY_CHECKPOINT_PATH to your checkpoint full path}"
 
   export POLICY_CACHE_DIR
-  export OPENPI_CACHE_DIR="${POLICY_CACHE_DIR}" # Backward-compatible alias.
   export HF_CACHE_DIR
   export ROSBAG_DIR
   export POLICY_CHECKPOINT_PATH

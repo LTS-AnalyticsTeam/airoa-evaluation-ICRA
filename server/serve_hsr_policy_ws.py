@@ -57,6 +57,8 @@ def main() -> None:
     )
 
     logging.info("Serving policy config=%s checkpoint=%s on %s:%s", config_name, checkpoint_dir, args.host, args.port)
+    # NOTE: Keep the OpenPI implementation as needed, but do not change the next two lines.
+    # They are the fixed websocket serving contract for the HSR client runtime.
     server = WebsocketPolicyServer(policy=policy, host=args.host, port=args.port, metadata=metadata)
     server.serve_forever()
 

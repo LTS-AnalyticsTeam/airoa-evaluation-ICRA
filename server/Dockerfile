@@ -10,20 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml uv.lock LICENSE README.md ./
 COPY packages/policy-client ./packages/policy-client
-COPY src/openpi ./src/openpi
+COPY src ./src
 COPY server ./server
 COPY runtime_core ./runtime_core
 
 # Create virtual environment and install locked deps including local workspace packages.
 RUN uv venv --python 3.11 /workspace/.venv
-RUN GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-dev
+RUN GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-dev --no-install-project
 RUN uv pip install --python /workspace/.venv/bin/python pytest
-
-# Support PyTorch checkpoints (same behavior as upstream serve_policy image).
-RUN /workspace/.venv/bin/python -c "import transformers; print(transformers.__file__)" | xargs dirname | xargs -I{} cp -r /workspace/src/openpi/models_pytorch/transformers_replace/* {}
 
 ENV PATH="/workspace/.venv/bin:${PATH}"
 ENV PYTHONPATH="/workspace:/workspace/src:/workspace/packages/policy-client/src"
-ENV OPENPI_DATA_HOME="/policy_assets"
 
 ENTRYPOINT ["/workspace/server/entrypoint.sh"]
