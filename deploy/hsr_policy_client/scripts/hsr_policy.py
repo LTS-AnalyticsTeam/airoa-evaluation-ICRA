@@ -35,6 +35,11 @@ UPSAMPLE_METHOD_SPLINE = "spline"
 UPSAMPLE_METHOD_LINEAR = "linear"
 UPSAMPLE_METHODS = [UPSAMPLE_METHOD_SPLINE, UPSAMPLE_METHOD_LINEAR]
 
+SERVICE_UPDATE_INSTRUCTION = "/hsr_policy_client/update_instruction"
+SERVICE_SET_MOTION_ENABLED = "/hsr_policy_client/set_motion_enabled"
+SERVICE_HAS_ACTION_OUTPUT = "/hsr_policy_client/has_action_output"
+SERVICE_RESET_ACTION_OUTPUT_FLAG = "/hsr_policy_client/reset_action_output_flag"
+
 ACTION_SMOOTHING_NONE = "none"
 ACTION_SMOOTHING_EMA = "ema"
 ACTION_SMOOTHING_MA = "moving_average"
@@ -357,6 +362,15 @@ def _param_to_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _parse_motion_toggle_message(message: Any) -> Optional[bool]:
+    text = str(message).strip().lower()
+    if text in {"1", "true", "on", "enable", "enabled", "auto", "resume", "run", "start"}:
+        return True
+    if text in {"0", "false", "off", "disable", "disabled", "manual", "stop", "pause", "halt"}:
+        return False
+    return None
+
+
 class SyntheticReplayEnv:
     """Environment for synthetic test-mode replay without requiring a robot."""
 
@@ -375,8 +389,11 @@ class SyntheticReplayEnv:
         self.instruction = str(rospy.get_param("~instruction", "Grasp the apple."))
         self.gripper_state = 0
         self.control_mode = "auto"
+        self.motion_enabled = True
+        self.last_execute_block_reason: Optional[str] = None
         self.joint_state: Optional[np.ndarray] = None
         self._last_action: Optional[np.ndarray] = None
+        self._has_action_output = False
 
         self.joint_state_names: list[str] = [
             "arm_lift_joint",
@@ -390,7 +407,10 @@ class SyntheticReplayEnv:
         ]
         self.base_action_names: list[str] = ["base_x", "base_y", "base_theta"]
 
-        rospy.Service("/hsr_policy_client/update_instruction", StringTrigger, self.update_instruction_srv)
+        rospy.Service(SERVICE_UPDATE_INSTRUCTION, StringTrigger, self.update_instruction_srv)
+        rospy.Service(SERVICE_SET_MOTION_ENABLED, StringTrigger, self.set_motion_enabled_srv)
+        rospy.Service(SERVICE_HAS_ACTION_OUTPUT, StringTrigger, self.has_action_output_srv)
+        rospy.Service(SERVICE_RESET_ACTION_OUTPUT_FLAG, StringTrigger, self.reset_action_output_flag_srv)
         rospy.loginfo(
             "Test mode enabled. Using synthetic random data image=%dx%d seed=%d (infinite loop)",
             self.image_height,
@@ -401,6 +421,27 @@ class SyntheticReplayEnv:
     def update_instruction_srv(self, req: StringTrigger):
         self.instruction = req.message
         rospy.loginfo("Instruction updated: %s", self.instruction)
+        return StringTriggerResponse(success=True)
+
+    def set_motion_enabled_srv(self, req: StringTrigger):
+        parsed = _parse_motion_toggle_message(req.message)
+        if parsed is None:
+            rospy.logwarn("Invalid set_motion_enabled request: %r", req.message)
+            return StringTriggerResponse(success=False)
+        self.motion_enabled = bool(parsed)
+        rospy.loginfo(
+            "Motion forwarding changed to: %s",
+            "enabled" if self.motion_enabled else "disabled",
+        )
+        return StringTriggerResponse(success=True)
+
+    def has_action_output_srv(self, req: StringTrigger):
+        _ = req
+        return StringTriggerResponse(success=bool(self._has_action_output))
+
+    def reset_action_output_flag_srv(self, req: StringTrigger):
+        _ = req
+        self._has_action_output = False
         return StringTriggerResponse(success=True)
 
     def is_finished(self) -> bool:
@@ -435,6 +476,11 @@ class SyntheticReplayEnv:
 
     def execute_actions(self, action: np.ndarray) -> bool:
         self._last_action = np.asarray(action, dtype=np.float32).reshape(-1)
+        self._has_action_output = True
+        if not self.motion_enabled:
+            self.last_execute_block_reason = "motion_disabled"
+            return False
+        self.last_execute_block_reason = None
         return True
 
     def sleep(self):
@@ -460,9 +506,13 @@ class HSREnv:
         self.hand_rgb = None
         self.joint_state = None
         self.gripper_state = 0
-        self.control_mode = None
+        self.control_mode = str(rospy.get_param("~default_control_mode", "auto")).strip().lower()
+        self.motion_enabled = True
+        self.last_execute_block_reason: Optional[str] = None
         self.gripper_mode = rospy.get_param("~gripper_mode", "continuous")
         self.instruction = rospy.get_param("~instruction", "Grasp the apple.")
+        self._has_action_output = False
+        rospy.loginfo("Initial control_mode: %s", self.control_mode)
 
         self.joint_state_names: list[str] = [
             "arm_lift_joint",
@@ -493,7 +543,10 @@ class HSREnv:
         self.gripper_close_client = SimpleActionClient("/hsrb/gripper_controller/grasp", GripperApplyEffortAction)
 
         # Register service (language instruction update).
-        rospy.Service("/hsr_policy_client/update_instruction", StringTrigger, self.update_instruction_srv)
+        rospy.Service(SERVICE_UPDATE_INSTRUCTION, StringTrigger, self.update_instruction_srv)
+        rospy.Service(SERVICE_SET_MOTION_ENABLED, StringTrigger, self.set_motion_enabled_srv)
+        rospy.Service(SERVICE_HAS_ACTION_OUTPUT, StringTrigger, self.has_action_output_srv)
+        rospy.Service(SERVICE_RESET_ACTION_OUTPUT_FLAG, StringTrigger, self.reset_action_output_flag_srv)
 
         # Initialize subscribers.
         rospy.Subscriber(
@@ -536,11 +589,35 @@ class HSREnv:
         self.gripper_state = self.GRIPPER_CLOSE
 
     def control_mode_callback(self, msg: String):
-        self.control_mode = msg.data
+        self.control_mode = str(msg.data).strip().lower()
+        rospy.loginfo("control_mode updated: %s", self.control_mode)
 
     def update_instruction_srv(self, req: StringTrigger):
         self.instruction = req.message
         rospy.loginfo("Instruction updated: %s", self.instruction)
+        return StringTriggerResponse(success=True)
+
+    def set_motion_enabled_srv(self, req: StringTrigger):
+        parsed = _parse_motion_toggle_message(req.message)
+        if parsed is None:
+            rospy.logwarn("Invalid set_motion_enabled request: %r", req.message)
+            return StringTriggerResponse(success=False)
+        self.motion_enabled = bool(parsed)
+        if not self.motion_enabled:
+            self.base_pub.publish(Twist())
+        rospy.loginfo(
+            "Motion forwarding changed to: %s",
+            "enabled" if self.motion_enabled else "disabled",
+        )
+        return StringTriggerResponse(success=True)
+
+    def has_action_output_srv(self, req: StringTrigger):
+        _ = req
+        return StringTriggerResponse(success=bool(self._has_action_output))
+
+    def reset_action_output_flag_srv(self, req: StringTrigger):
+        _ = req
+        self._has_action_output = False
         return StringTriggerResponse(success=True)
 
     def reset_observation(self, *, reset_joint_state: bool = True):
@@ -595,9 +672,15 @@ class HSREnv:
         bool
             True if action execution is allowed and sent, otherwise False.
         """
+        self._has_action_output = True
+        if not self.motion_enabled:
+            self.last_execute_block_reason = "motion_disabled"
+            return False
         # Execute only when control_mode is set to "auto".
         if self.control_mode != "auto":
+            self.last_execute_block_reason = f"control_mode={self.control_mode!r}"
             return False  # Return False when execution is not allowed.
+        self.last_execute_block_reason = None
 
         # Arm control.
         arm_traj = JointTrajectory()
@@ -853,7 +936,7 @@ class ExecTraceRecorder:
         config_name: str,
         joint_dim_names: Optional[list[str]] = None,
         base_action_names: Optional[list[str]] = None,
-        base_dir: str = "/home/policy/deploy_record",
+        base_dir: str = "/root/eval_results/traces",
     ):
         self.enabled = bool(enabled)
         self.config_name = str(config_name)
@@ -1063,6 +1146,7 @@ def main():
     test_mode: bool = _param_to_bool(rospy.get_param("~test_mode", True))
 
     save_exec_trace: bool = rospy.get_param("~save_exec_trace", False)
+    trace_base_dir: str = str(rospy.get_param("~trace_base_dir", "/root/eval_results/traces"))
     trace_group_name = _build_trace_group_name(
         config_name=config_name,
         adopted_action_chunks=int(adopted_action_chunks),
@@ -1095,6 +1179,7 @@ def main():
     rospy.loginfo("execution_freq: %s", execution_freq)
     rospy.loginfo("gripper_mode: %s", rospy.get_param("~gripper_mode", "continuous"))
     rospy.loginfo("save_exec_trace: %s", save_exec_trace)
+    rospy.loginfo("trace_base_dir: %s", trace_base_dir)
     rospy.loginfo("exec_trace_group_name: %s", trace_group_name)
 
     if test_mode:
@@ -1130,6 +1215,7 @@ def main():
         config_name=trace_group_name,
         joint_dim_names=env.joint_state_names,
         base_action_names=env.base_action_names,
+        base_dir=trace_base_dir,
     )
     rospy.on_shutdown(recorder.save_and_plot)
     rospy.on_shutdown(policy.log_inference_stats)
@@ -1211,7 +1297,11 @@ def main():
                 if is_executed:
                     rospy.loginfo("Action executed.")
                 else:
-                    rospy.loginfo("Action not executed.")
+                    reason = getattr(env, "last_execute_block_reason", None)
+                    if reason:
+                        rospy.loginfo("Action not executed. reason=%s", reason)
+                    else:
+                        rospy.loginfo("Action not executed.")
                 rospy.loginfo("Language instruction: %s", obs.get("instruction", ""))
                 rospy.loginfo("Action: %s", action)
             if not test_mode:

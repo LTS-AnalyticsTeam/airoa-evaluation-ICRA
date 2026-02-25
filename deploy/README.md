@@ -2,6 +2,63 @@
 
 Real HSR deployment guide.
 
+## 0. Web GUI Quick Start (Recommended)
+
+Minimum requirements:
+
+- `python3` is available
+- `deploy/models.json` and `deploy/evaluation_tasks.json` are already edited for your environment
+
+Initial setup example:
+
+```bash
+cp deploy/models.example.json deploy/models.json
+cp deploy/evaluation_tasks.example.json deploy/evaluation_tasks.json
+```
+
+Start:
+
+```bash
+python3 deploy/eval_competition_web.py \
+  --models deploy/models.json \
+  --tasks deploy/evaluation_tasks.json \
+  --runs-per-sht 2 \
+  --hsr-ip 100.119.167.94
+```
+
+Options used in this quick-start command:
+
+- `--models`: model list JSON path.
+- `--tasks`: SHT/PA task definition JSON path.
+- `--runs-per-sht 2`: run each SHT twice (`default: 1`).
+- `--hsr-ip 100.119.167.94`: sets robot IP and auto-derives `ROS_MASTER_URI=http://100.119.167.94:11311`.
+
+Access:
+
+- Open `http://<host-machine-ip>:8080` from any device on the same network
+
+Useful optional flags for web run:
+
+- `--host 0.0.0.0 --port 8080`: bind address/port
+- `--max-running N`: maximum concurrently running model server containers
+- `--start-port P`: base port for model servers
+- `--skip-client-up`: reuse already running `airoa_hsr_client`
+- `--disable-gpu`: run model servers without `--gpus all`
+- `--ros-ip-choice 2`: select the second detected host IP candidate
+
+GUI flow:
+
+1. Select a model in `Select Model`.
+2. Click `Start evaluating <model>` (use `Choose another model` if you need to reselect).
+3. For the first PA after model load, the timer starts after first action detection. After that, each PA timer starts when the PA starts.
+4. For each PA, record `Success` or `Fail`.
+5. If you entered a wrong PA result, enable `Edit Enabled` in `PA Result Records`, then switch the row radio button (`Success`/`Fail`). The change is saved immediately.
+6. If you closed SHT review with `Close (Edit Later)`, you can still fix PA records from `PA Result Records` before continuing.
+7. `SHT Fail (Skip Rest)` is shown only on the `Next PA` screen after a PA is marked `Fail`.
+8. At SHT end, choose `SHT Success` or `SHT Fail`, then confirm with `Confirm and Next SHT`.
+9. After each SHT finishes all eval repeats, complete `Reset Robot`, review the SHT summary (`sht_success_rate` + per-PA success rates), then continue.
+10. After the final SHT summary of a model, the GUI returns to model selection.
+
 ## 1. Host prerequisites
 
 - Linux
@@ -96,6 +153,7 @@ Run `down` and `up` after changing:
 
 - `POLICY_CHECKPOINT_PATH`
 - policy-specific server environment values
+- client-side source under `deploy/hsr_policy_client/*` (image rebuild required)
 
 ## 8. Troubleshooting
 
@@ -104,6 +162,8 @@ Run `down` and `up` after changing:
 - `POLICY_CHECKPOINT_PATH is missing`: set `POLICY_CHECKPOINT_PATH`
 - client waits for WebSocket server: check `./RUN-DOCKER-CONTAINER.sh logs policy_server`
 - `unable to contact ROS master`: check network route, `ROS_MASTER_URI`, and `ROS_IP`
+- `_tkinter.TclError: couldn't connect to display`: run from a graphical session (`DISPLAY` is valid), or reconnect with `ssh -Y`
+- `Action not executed. reason=control_mode=...`: ensure `/control_mode` is `auto` (default is now `auto` when topic is absent)
 
 ## 9. Stop
 

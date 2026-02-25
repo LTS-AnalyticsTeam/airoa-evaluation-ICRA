@@ -45,6 +45,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - /dev:/dev
       - ${ROSBAG_DIR:-./datasets/rosbags}:/root/datasets/rosbags
+      - ${EVAL_RESULT_DIR:-./results}:/root/eval_results
     command: >-
       bash -lc "
       source /opt/ros/noetic/setup.bash &&

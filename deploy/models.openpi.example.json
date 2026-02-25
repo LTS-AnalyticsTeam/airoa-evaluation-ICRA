@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "name": "team_a_main",
+      "worktree_path": "/abs/path/model-worktrees/team-a",
+      "checkpoint_path": "/abs/path/checkpoints/team_a/200000",
+      "config_name": "your_openpi_config_name",
+      "env": {
+        "POLICY_PYTORCH_DEVICE": "cuda"
+      }
+    },
+    {
+      "name": "team_a_ckpt150k",
+      "worktree_path": "/abs/path/model-worktrees/team-a",
+      "checkpoint_path": "/abs/path/checkpoints/team_a/150000",
+      "config_name": "your_openpi_config_name",
+      "env": {
+        "POLICY_PYTORCH_DEVICE": "cuda"
+      }
+    },
+    {
+      "name": "team_b_main",
+      "worktree_path": "/abs/path/model-worktrees/team-b",
+      "checkpoint_path": "/abs/path/checkpoints/team_b/200000",
+      "config_name": "your_openpi_config_name",
+      "env": {
+        "POLICY_PYTORCH_DEVICE": "cuda"
+      }
+    }
+  ]
+}

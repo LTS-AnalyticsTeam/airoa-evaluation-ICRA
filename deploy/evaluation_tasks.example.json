@@ -1,0 +1,38 @@
+{
+  "shts": [
+    {
+      "name": "Task_01",
+      "pas": [
+        {
+          "name": "PA_01",
+          "prompt": "Pick up the bottle on the right"
+        },
+        {
+          "name": "PA_02",
+          "prompt": "Place the bottle into the box labeled 1"
+        },
+        {
+          "name": "PA_03",
+          "prompt": "Move to standby pose near the table"
+        }
+      ]
+    },
+    {
+      "name": "Task_02",
+      "pas": [
+        {
+          "name": "PA_01",
+          "prompt": "Pick up the can on the left"
+        },
+        {
+          "name": "PA_02",
+          "prompt": "Place the can on the tray"
+        },
+        {
+          "name": "PA_03",
+          "prompt": "Return to standby pose"
+        }
+      ]
+    }
+  ]
+}
