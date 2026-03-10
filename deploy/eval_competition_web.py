@@ -91,6 +91,7 @@ class WebEvaluationState:
         self._wait_action_started_mono: float | None = None
         self._last_wait_hint_mono = 0.0
         self._startup_action_gate_pending = True
+        self._pending_pa_rosbag_args: dict[str, Any] | None = None
 
         self._lock = threading.RLock()
         self._running = True
@@ -162,6 +163,7 @@ class WebEvaluationState:
         self._pending_policy_summary = None
         self._pending_sht_summary = None
         self._post_sht_summary_phase = None
+        self._pending_pa_rosbag_args = None
         # Require first-action detection when a model is newly loaded/selected.
         self._startup_action_gate_pending = True
         self.phase = "policy_ready"
@@ -341,6 +343,30 @@ class WebEvaluationState:
         self.ros.reset_action_output_flag()
         self._last_wait_hint_mono = 0.0
 
+    def _set_pending_pa_rosbag_locked(
+        self,
+        *,
+        policy_name: str,
+        sht_name: str,
+        repeat_index: int,
+        pa_index: int,
+        pa_name: str,
+    ) -> None:
+        self._pending_pa_rosbag_args = {
+            "policy_name": policy_name,
+            "sht_name": sht_name,
+            "repeat_index": int(repeat_index),
+            "pa_index": int(pa_index),
+            "pa_name": pa_name,
+        }
+
+    def _start_pending_pa_rosbag_locked(self) -> None:
+        if self._pending_pa_rosbag_args is None:
+            return
+        rosbag_args = dict(self._pending_pa_rosbag_args)
+        self.ros.start_pa_rosbag(**rosbag_args)
+        self._pending_pa_rosbag_args = None
+
     def _poll_action_output_locked(self) -> None:
         try:
             has_action_output = self.ros.has_action_output()
@@ -372,6 +398,7 @@ class WebEvaluationState:
     def _on_first_action_detected_locked(self) -> None:
         if not self.awaiting_first_action:
             return
+        self._start_pending_pa_rosbag_locked()
         self._startup_action_gate_pending = False
         self.awaiting_first_action = False
         self._wait_action_started_mono = None
@@ -442,13 +469,15 @@ class WebEvaluationState:
                 config_name=config_name,
                 initial_instruction=pa.prompt,
             )
-            self.ros.start_pa_rosbag(
+            self._set_pending_pa_rosbag_locked(
                 policy_name=participant.name,
                 sht_name=sht.name,
                 repeat_index=self.repeat_idx,
                 pa_index=self.pa_idx,
                 pa_name=pa.name,
             )
+            if not self._startup_action_gate_pending:
+                self._start_pending_pa_rosbag_locked()
             self.ros.set_instruction(pa.prompt)
             self.ros.set_motion_enabled(True)
             if self._startup_action_gate_pending:
@@ -462,6 +491,7 @@ class WebEvaluationState:
             self.motion_enabled = True
             self.awaiting_first_action = False
             self._wait_action_started_mono = None
+            self._pending_pa_rosbag_args = None
             self._set_status(f"Failed to start run: {exc}")
             raise
 
@@ -574,6 +604,7 @@ class WebEvaluationState:
         self.awaiting_first_action = False
         self._wait_action_started_mono = None
         self.motion_enabled = True
+        self._pending_pa_rosbag_args = None
         self._set_status("SHT run completed. Exec trace should be saved under result directory.")
 
         if self.repeat_idx < self.runs_per_sht:
@@ -656,6 +687,7 @@ class WebEvaluationState:
         self._pending_policy_summary = None
         self._pending_sht_summary = None
         self._post_sht_summary_phase = None
+        self._pending_pa_rosbag_args = None
         self.phase = "policy_select"
         self._set_status("Select a model to start evaluation.")
 
@@ -679,6 +711,7 @@ class WebEvaluationState:
         self._pending_policy_summary = None
         self._pending_sht_summary = None
         self._post_sht_summary_phase = None
+        self._pending_pa_rosbag_args = None
         self.done_message = done_message
         self._update_histogram_locked()
         self._set_status(status_message)
