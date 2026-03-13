@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "repo_id": "airoa-org/airoa-moma",
+    "root": "/srv/shared/ICRA2026/datasets/airoa-moma-pi05"
+  },
+  "policy": {
+    "type": "pi05",
+    "pretrained_path": "lerobot/pi05_base",
+    "repo_id": "lt-s/test_pi05",
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "compile_model": true,
+    "gradient_checkpointing": true,
+    "freeze_vision_encoder": false,
+    "train_expert_only": false,
+    "input_features": {
+      "observation.image.head": { "type": "VISUAL", "shape": [480, 640, 3] },
+      "observation.image.hand": { "type": "VISUAL", "shape": [480, 640, 3] },
+      "observation.state": { "type": "STATE", "shape": [8] }
+    },
+    "output_features": {
+      "action": { "type": "ACTION", "shape": [11] }
+    }
+  },
+  "job_name": "pi05_training",
+  "steps": 3000,
+  "batch_size": 16,
+  "peft": {
+    "method_type": "LORA",
+    "r": 2
+  },
+  "wandb": {
+    "enable": true
+  }
+}
