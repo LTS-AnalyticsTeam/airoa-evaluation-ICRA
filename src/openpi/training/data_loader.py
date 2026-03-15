@@ -49,6 +49,14 @@ class DataLoader(Protocol[T_co]):
     def __iter__(self) -> Iterator[T_co]:
         raise NotImplementedError("Subclasses of DataLoader should implement __iter__.")
 
+    def num_samples(self) -> int | None:
+        """Get the number of samples in the underlying dataset, if known."""
+        raise NotImplementedError("Subclasses of DataLoader should implement num_samples.")
+
+    def steps_per_epoch(self) -> int | None:
+        """Get the number of optimizer steps in one epoch, if known."""
+        raise NotImplementedError("Subclasses of DataLoader should implement steps_per_epoch.")
+
 
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
@@ -336,7 +344,12 @@ def create_torch_data_loader(
         framework=framework,
     )
 
-    return DataLoaderImpl(data_config, data_loader)
+    return DataLoaderImpl(
+        data_config,
+        data_loader,
+        num_samples=len(dataset),
+        steps_per_epoch=len(dataset) // batch_size,
+    )
 
 
 def create_rlds_data_loader(
@@ -377,7 +390,12 @@ def create_rlds_data_loader(
         num_batches=num_batches,
     )
 
-    return DataLoaderImpl(data_config, data_loader)
+    return DataLoaderImpl(
+        data_config,
+        data_loader,
+        num_samples=len(dataset),
+        steps_per_epoch=len(dataset) // batch_size,
+    )
 
 
 class TorchDataLoader:
@@ -530,9 +548,18 @@ class RLDSDataLoader:
 
 
 class DataLoaderImpl(DataLoader):
-    def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
+    def __init__(
+        self,
+        data_config: _config.DataConfig,
+        data_loader: TorchDataLoader | RLDSDataLoader,
+        *,
+        num_samples: int | None = None,
+        steps_per_epoch: int | None = None,
+    ):
         self._data_config = data_config
         self._data_loader = data_loader
+        self._num_samples = num_samples
+        self._steps_per_epoch = steps_per_epoch
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config
@@ -540,3 +567,9 @@ class DataLoaderImpl(DataLoader):
     def __iter__(self):
         for batch in self._data_loader:
             yield _model.Observation.from_dict(batch), batch["actions"]
+
+    def num_samples(self) -> int | None:
+        return self._num_samples
+
+    def steps_per_epoch(self) -> int | None:
+        return self._steps_per_epoch

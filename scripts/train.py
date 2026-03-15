@@ -222,6 +222,10 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
     )
+    num_samples = data_loader.num_samples()
+    steps_per_epoch = data_loader.steps_per_epoch()
+    if num_samples is not None and steps_per_epoch is not None:
+        logging.info(f"Dataset size: {num_samples:,} samples, {steps_per_epoch:,} steps/epoch")
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
@@ -263,6 +267,8 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            if steps_per_epoch:
+                reduced_info["epoch"] = (step + 1) / steps_per_epoch
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
