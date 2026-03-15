@@ -44,3 +44,15 @@ def test_pi0_all_lora():
     assert len(state) == 17
     assert all("lora" not in p for p in state)
     assert all("llm" in p for p in state)
+
+
+def test_pi05_all_lora():
+    config = _pi0_config.Pi0Config(
+        pi05=True,
+        paligemma_variant="gemma_2b_lora",
+        action_expert_variant="gemma_300m_lora",
+    )
+    state = _get_frozen_state(config)
+    assert len(state) == 17
+    assert all("lora" not in p for p in state)
+    assert all("llm" in p for p in state)

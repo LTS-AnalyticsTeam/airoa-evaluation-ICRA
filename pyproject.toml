@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11.0, <3.12"
 license = { file = "LICENSE" }
 dependencies = [
+    "av==14.2.0",
     "augmax>=0.3.4",
     "dm-tree>=0.1.8",
     "einops>=0.8.0",
@@ -134,5 +135,6 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
+addopts = "-p no:launch_testing -p no:launch_ros -p no:ament_copyright -p no:ament_xmllint -p no:ament_pep257 -p no:ament_flake8 -p no:ament_lint"
 markers = ["manual: should be run manually."]
 testpaths = ["src", "scripts", "packages"]

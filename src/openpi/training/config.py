@@ -837,6 +837,26 @@ _CONFIGS = [
         pytorch_weight_path="/home/user_00103_25b505/shared-storage/dev/models/pi0",
     ),
     TrainConfig(
+        name="pi0_hsr_lora",
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=LeRobotHSRDataConfig(
+            repo_id="processed/2025-05-06-07-v3.1-success-only",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_workers=8,
+        batch_size=256,
+        num_train_steps=200_000,
+        pytorch_weight_path="/home/user_00103_25b505/shared-storage/dev/models/pi0",
+    ),
+    TrainConfig(
         name="pi0_libero_low_mem_finetune",
         # Here is an example of loading a pi0 model for LoRA fine-tuning.
         model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
@@ -1095,6 +1115,33 @@ _CONFIGS = [
         num_train_steps=200_000,
         batch_size=512,
         num_workers=8, # Increase num_workers to speed up data loading with larger datasets.
+        pytorch_weight_path="/home/user_00103_25b505/shared-storage/dev/models/pi05",
+    ),
+    TrainConfig(
+        name="pi05_hsr_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # pi05 is trained with 32-dim actions
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotHSRDataConfig(
+            repo_id="processed/2025-05-06-07-v3.1-success-only",
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        num_train_steps=200_000,
+        batch_size=256,
+        num_workers=8,  # Increase num_workers to speed up data loading with larger datasets.
         pytorch_weight_path="/home/user_00103_25b505/shared-storage/dev/models/pi05",
     ),
     TrainConfig(
