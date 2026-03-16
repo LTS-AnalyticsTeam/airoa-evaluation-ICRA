@@ -317,7 +317,7 @@ uv run python scripts/train.py pi05_hsr_lora \
   --exp-name pi05_hsr_lora_run1 \
   --data.repo-id "${DATASET_PATH}" \
   --checkpoint-base-dir "${OUTPUT_BASE}" \
-  --resume True
+  --resume
 ```
 
 ## 補足
