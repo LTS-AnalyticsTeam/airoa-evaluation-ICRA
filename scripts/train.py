@@ -2,6 +2,7 @@ import dataclasses
 import functools
 import logging
 import platform
+import time
 from typing import Any
 
 import etils.epath as epath
@@ -26,6 +27,19 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+
+
+@dataclasses.dataclass(frozen=True)
+class StepProfileMetrics:
+    loader_wait_sec: float
+    to_device_sec: float
+    fetch_total_sec: float
+    fetch_time_sec: float
+    compute_sec: float
+    train_step_time_sec: float
+    total_iter_sec: float
+    total_iter_time_sec: float
+    samples_per_sec: float
 
 
 def init_logging():
@@ -191,6 +205,46 @@ def train_step(
     return new_state, info
 
 
+def _make_step_profile(
+    batch_size: int,
+    loader_profile: _data_loader.BatchProfile | None,
+    *,
+    fetch_time_sec: float,
+    train_step_time_sec: float,
+) -> StepProfileMetrics:
+    loader_wait_sec = loader_profile.loader_wait_sec if loader_profile is not None else fetch_time_sec
+    to_device_sec = loader_profile.to_device_sec if loader_profile is not None else 0.0
+    fetch_total_sec = loader_profile.fetch_total_sec if loader_profile is not None else fetch_time_sec
+    total_iter_time_sec = fetch_time_sec + train_step_time_sec
+    samples_per_sec = batch_size / total_iter_time_sec if total_iter_time_sec > 0 else float("inf")
+
+    return StepProfileMetrics(
+        loader_wait_sec=loader_wait_sec,
+        to_device_sec=to_device_sec,
+        fetch_total_sec=fetch_total_sec,
+        fetch_time_sec=fetch_time_sec,
+        compute_sec=train_step_time_sec,
+        train_step_time_sec=train_step_time_sec,
+        total_iter_sec=total_iter_time_sec,
+        total_iter_time_sec=total_iter_time_sec,
+        samples_per_sec=samples_per_sec,
+    )
+
+
+def _format_step_profile(metrics: StepProfileMetrics) -> str:
+    return ", ".join(f"{field.name}={getattr(metrics, field.name):.6f}" for field in dataclasses.fields(metrics))
+
+
+def _format_profile_summary(metrics: list[StepProfileMetrics]) -> str:
+    summary = []
+    for field in dataclasses.fields(StepProfileMetrics):
+        values = np.asarray([getattr(metric, field.name) for metric in metrics], dtype=np.float64)
+        summary.append(f"{field.name}_avg={values.mean():.6f}")
+        summary.append(f"{field.name}_min={values.min():.6f}")
+        summary.append(f"{field.name}_max={values.max():.6f}")
+    return ", ".join(summary)
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -259,10 +313,30 @@ def main(config: _config.TrainConfig):
         dynamic_ncols=True,
     )
 
+    profile_metrics: list[StepProfileMetrics] = []
+    profile_summary_logged = False
+    profile_measure_limit = config.profile_warmup_steps + config.profile_measure_steps
+    if config.profile_performance:
+        logging.info(
+            "Performance profiling enabled: warmup_steps=%d, measure_steps=%d",
+            config.profile_warmup_steps,
+            config.profile_measure_steps,
+        )
+        data_loader.reset_profile()
+
     infos = []
     for step in pbar:
-        with sharding.set_mesh(mesh):
-            train_state, info = ptrain_step(train_rng, train_state, batch)
+        if config.profile_performance:
+            train_step_start = time.perf_counter()
+            with sharding.set_mesh(mesh):
+                train_state, info = ptrain_step(train_rng, train_state, batch)
+            # JAX dispatch is asynchronous, so synchronize here to measure the actual device compute time instead of
+            # the enqueue latency seen by Python.
+            train_state, info = jax.block_until_ready((train_state, info))
+            train_step_time_sec = time.perf_counter() - train_step_start
+        else:
+            with sharding.set_mesh(mesh):
+                train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
@@ -273,10 +347,58 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
-        batch = next(data_iter)
+        if config.profile_performance:
+            fetch_start = time.perf_counter()
+            batch = next(data_iter)
+            fetch_time_sec = time.perf_counter() - fetch_start
+            step_profile = _make_step_profile(
+                config.batch_size,
+                data_loader.latest_profile(),
+                fetch_time_sec=fetch_time_sec,
+                train_step_time_sec=train_step_time_sec,
+            )
+            relative_step = step - start_step
+            if relative_step < config.profile_warmup_steps:
+                if relative_step == 0 and config.profile_warmup_steps > 0:
+                    logging.info(
+                        "Performance profiling warmup started: first %d step(s) are excluded from the summary.",
+                        config.profile_warmup_steps,
+                    )
+            elif relative_step < profile_measure_limit:
+                profile_metrics.append(step_profile)
+                logging.info(
+                    "Performance profile step %d/%d (train step=%d): %s",
+                    len(profile_metrics),
+                    config.profile_measure_steps,
+                    step,
+                    _format_step_profile(step_profile),
+                )
+                if len(profile_metrics) == config.profile_measure_steps and not profile_summary_logged:
+                    logging.info(
+                        "Performance profile summary: measured_steps=%d, %s",
+                        len(profile_metrics),
+                        _format_profile_summary(profile_metrics),
+                    )
+                    profile_summary_logged = True
+            elif relative_step == profile_measure_limit and config.profile_measure_steps == 0 and not profile_summary_logged:
+                logging.info("Performance profile summary: measured_steps=0")
+                profile_summary_logged = True
+        else:
+            batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+
+    if config.profile_performance and not profile_summary_logged:
+        if profile_metrics:
+            logging.info(
+                "Performance profile summary (partial): measured_steps=%d/%d, %s",
+                len(profile_metrics),
+                config.profile_measure_steps,
+                _format_profile_summary(profile_metrics),
+            )
+        else:
+            logging.info("Performance profile summary: no measured steps were collected.")
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

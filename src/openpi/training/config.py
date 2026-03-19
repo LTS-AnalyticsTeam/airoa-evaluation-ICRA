@@ -652,6 +652,13 @@ class TrainConfig:
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
+    # If true, enable lightweight per-step performance profiling for the data pipeline and train step.
+    profile_performance: bool = False
+    # Number of initial steps to exclude from profiling summaries to avoid one-time effects like JIT compilation.
+    profile_warmup_steps: int = 3
+    # Number of steps to measure after the warmup window.
+    profile_measure_steps: int = 10
+
     # How often (in steps) to log training metrics.
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
@@ -696,6 +703,10 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+        if self.profile_warmup_steps < 0:
+            raise ValueError("profile_warmup_steps must be non-negative.")
+        if self.profile_measure_steps < 0:
+            raise ValueError("profile_measure_steps must be non-negative.")
 
 
 # Use `get_config` if you need to get a config by name in your code.

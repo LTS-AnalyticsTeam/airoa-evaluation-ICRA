@@ -14,7 +14,7 @@ import sys
 from openpi.training import config as _config
 from scripts import train
 
-config_name, checkpoint_base_dir, exp_name, resume, num_train_steps = sys.argv[1:]
+config_name, checkpoint_base_dir, exp_name, resume, num_train_steps, profile = sys.argv[1:]
 config = dataclasses.replace(
     _config._CONFIGS_DICT[config_name],  # noqa: SLF001
     batch_size=2,
@@ -26,6 +26,9 @@ config = dataclasses.replace(
     num_train_steps=int(num_train_steps),
     log_interval=1,
     wandb_enabled=False,
+    profile_performance=(profile == "true"),
+    profile_warmup_steps=1,
+    profile_measure_steps=1,
 )
 train.main(config)
 """
@@ -51,7 +54,15 @@ def _clean_pythonpath(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def _run_train(config_name: str, checkpoint_base_dir: str, exp_name: str, *, resume: bool, num_train_steps: int) -> None:
+def _run_train(
+    config_name: str,
+    checkpoint_base_dir: str,
+    exp_name: str,
+    *,
+    resume: bool,
+    num_train_steps: int,
+    profile: bool = False,
+) -> None:
     env = _clean_pythonpath(dict(os.environ))
     env["JAX_PLATFORMS"] = "cpu"
     env["OPENPI_DISABLE_ASYNC_CHECKPOINTING"] = "1"
@@ -65,6 +76,7 @@ def _run_train(config_name: str, checkpoint_base_dir: str, exp_name: str, *, res
             exp_name,
             "true" if resume else "false",
             str(num_train_steps),
+            "true" if profile else "false",
         ],
         check=True,
         cwd=pathlib.Path(__file__).resolve().parent.parent,

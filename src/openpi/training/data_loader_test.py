@@ -47,6 +47,26 @@ def test_torch_data_loader_parallel():
         assert all(x.shape[0] == 4 for x in jax.tree.leaves(batch))
 
 
+def test_torch_data_loader_profile():
+    config = pi0_config.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
+    dataset = _data_loader.FakeDataset(config, 8)
+
+    loader = _data_loader.TorchDataLoader(
+        dataset,
+        local_batch_size=4,
+        num_batches=1,
+        profile_enabled=True,
+    )
+    batch = next(iter(loader))
+    profile = loader.latest_profile()
+
+    assert all(x.shape[0] == 4 for x in jax.tree.leaves(batch))
+    assert profile is not None
+    assert profile.loader_wait_sec >= 0.0
+    assert profile.to_device_sec >= 0.0
+    assert profile.fetch_total_sec >= profile.loader_wait_sec
+
+
 def test_with_fake_dataset():
     config = _config.get_config("debug")
 
@@ -82,3 +102,14 @@ def test_with_real_dataset():
 
     for _, actions in batches:
         assert actions.shape == (config.batch_size, config.model.action_horizon, config.model.action_dim)
+
+
+def test_with_fake_dataset_profile():
+    config = dataclasses.replace(_config.get_config("debug"), profile_performance=True)
+
+    loader = _data_loader.create_data_loader(config, skip_norm_stats=True, num_batches=1)
+    _ = next(iter(loader))
+    profile = loader.latest_profile()
+
+    assert profile is not None
+    assert profile.fetch_total_sec >= profile.loader_wait_sec

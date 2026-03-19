@@ -135,6 +135,12 @@ uv run python scripts/train.py pi05_hsr_lora \
   - 学習ステップ数です。
 - `--num-workers`
   - DataLoader の worker 数です。
+- `--profile-performance True`
+  - DataLoader 待ち時間、JAX array 化、train step compute を軽量計測します。
+- `--profile-warmup-steps`
+  - JIT compile などの初期オーバーヘッドを除外する warmup step 数です。
+- `--profile-measure-steps`
+  - 詳細ログと集計を出す計測 step 数です。
 - `--seed`
   - 乱数 seed です。
 - `--log-interval`
@@ -160,10 +166,51 @@ uv run python scripts/train.py pi05_hsr_lora \
   --batch-size 128 \
   --num-train-steps 100000 \
   --num-workers 16 \
+  --profile-performance True \
+  --profile-warmup-steps 3 \
+  --profile-measure-steps 20 \
   --log-interval 20 \
   --save-interval 2000 \
   --fsdp-devices 2
 ```
+
+### 性能ボトルネック計測
+
+`--profile-performance True` を付けると、warmup 後の各 step について次をログ出力します。
+
+- `loader_wait_sec`
+  - `next(data_iter)` のうち worker / collate / batch 準備待ちに使った時間です。
+- `to_device_sec`
+  - `jax.make_array_from_process_local_data(...)` と同期込みの JAX array 化時間です。
+- `fetch_total_sec`
+  - `loader_wait_sec + to_device_sec` です。
+- `compute_sec`
+  - `ptrain_step(...)` から `block_until_ready(...)` 完了までの device compute 時間です。
+- `total_iter_sec`
+  - `fetch_time_sec + train_step_time_sec` です。
+- `samples_per_sec`
+  - グローバル batch size 基準のスループットです。
+
+例:
+
+```bash
+uv run python scripts/train.py pi05_hsr_lora \
+  --exp-name pi05_hsr_lora_profile \
+  --data.repo-id "${DATASET_PATH}" \
+  --checkpoint-base-dir "${OUTPUT_BASE}" \
+  --batch-size 64 \
+  --num-workers 8 \
+  --num-train-steps 40 \
+  --profile-performance True \
+  --profile-warmup-steps 3 \
+  --profile-measure-steps 10
+```
+
+比較メモ:
+
+- `num_workers` を変えたときに `loader_wait_sec` が大きく下がるなら data pipeline 律速です。
+- `batch_size` を上げると `compute_sec` の比率が増え、`samples_per_sec` も伸びるなら compute 寄りです。
+- `to_device_sec` が `fetch_total_sec` の大半を占めるなら host→device / JAX array 化が詰まっています。
 
 ### 学習率スケジュール
 

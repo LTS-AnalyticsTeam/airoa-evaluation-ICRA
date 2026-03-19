@@ -1,7 +1,9 @@
+import dataclasses
 from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
+import time
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -17,6 +19,13 @@ from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
+
+
+@dataclasses.dataclass(frozen=True)
+class BatchProfile:
+    loader_wait_sec: float
+    to_device_sec: float
+    fetch_total_sec: float
 
 
 class Dataset(Protocol[T_co]):
@@ -56,6 +65,14 @@ class DataLoader(Protocol[T_co]):
     def steps_per_epoch(self) -> int | None:
         """Get the number of optimizer steps in one epoch, if known."""
         raise NotImplementedError("Subclasses of DataLoader should implement steps_per_epoch.")
+
+    def latest_profile(self) -> BatchProfile | None:
+        """Get profiling information for the most recently fetched batch, if profiling is enabled."""
+        raise NotImplementedError("Subclasses of DataLoader should implement latest_profile.")
+
+    def reset_profile(self) -> None:
+        """Reset any profiling state maintained by the data loader."""
+        raise NotImplementedError("Subclasses of DataLoader should implement reset_profile.")
 
 
 class TransformedDataset(Dataset[T_co]):
@@ -262,6 +279,7 @@ def create_data_loader(
             num_batches=num_batches,
             skip_norm_stats=skip_norm_stats,
             framework=framework,
+            profile_enabled=config.profile_performance,
         )
     return create_torch_data_loader(
         data_config,
@@ -275,6 +293,7 @@ def create_data_loader(
         seed=config.seed,
         skip_norm_stats=skip_norm_stats,
         framework=framework,
+        profile_enabled=config.profile_performance,
     )
 
 
@@ -291,6 +310,7 @@ def create_torch_data_loader(
     num_workers: int = 0,
     seed: int = 0,
     framework: str = "jax",
+    profile_enabled: bool = False,
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
     """Create a data loader for training.
 
@@ -342,6 +362,7 @@ def create_torch_data_loader(
         num_workers=num_workers,
         seed=seed,
         framework=framework,
+        profile_enabled=profile_enabled,
     )
 
     return DataLoaderImpl(
@@ -362,6 +383,7 @@ def create_rlds_data_loader(
     shuffle: bool = False,
     num_batches: int | None = None,
     framework: str = "jax",
+    profile_enabled: bool = False,
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
     """Create an RLDS data loader for training.
 
@@ -388,6 +410,7 @@ def create_rlds_data_loader(
         dataset,
         sharding=sharding,
         num_batches=num_batches,
+        profile_enabled=profile_enabled,
     )
 
     return DataLoaderImpl(
@@ -413,6 +436,7 @@ class TorchDataLoader:
         num_workers: int = 0,
         seed: int = 0,
         framework: str = "jax",
+        profile_enabled: bool = False,
     ):
         """Create a PyTorch data loader.
 
@@ -444,6 +468,8 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
+        self._profile_enabled = profile_enabled
+        self._latest_profile: BatchProfile | None = None
 
         mp_context = None
         if num_workers > 0:
@@ -469,6 +495,12 @@ class TorchDataLoader:
     def torch_loader(self) -> torch.utils.data.DataLoader:
         return self._data_loader
 
+    def latest_profile(self) -> BatchProfile | None:
+        return self._latest_profile
+
+    def reset_profile(self) -> None:
+        self._latest_profile = None
+
     def __iter__(self):
         num_items = 0
         while True:
@@ -477,15 +509,43 @@ class TorchDataLoader:
                 if self._num_batches is not None and num_items >= self._num_batches:
                     return
                 try:
-                    batch = next(data_iter)
+                    if self._profile_enabled:
+                        loader_wait_start = time.perf_counter()
+                        batch = next(data_iter)
+                        loader_wait_sec = time.perf_counter() - loader_wait_start
+                    else:
+                        batch = next(data_iter)
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
                 # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
                 if self._sharding is not None:
-                    yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    if self._profile_enabled:
+                        to_device_start = time.perf_counter()
+                        batch = jax.tree.map(
+                            lambda x: jax.make_array_from_process_local_data(self._sharding, x),
+                            batch,
+                        )
+                        # JAX dispatch is asynchronous, so synchronize only in profiling mode to measure the actual
+                        # host->device / array materialization time instead of the enqueue latency.
+                        batch = jax.block_until_ready(batch)
+                        to_device_sec = time.perf_counter() - to_device_start
+                        self._latest_profile = BatchProfile(
+                            loader_wait_sec=loader_wait_sec,
+                            to_device_sec=to_device_sec,
+                            fetch_total_sec=loader_wait_sec + to_device_sec,
+                        )
+                    else:
+                        batch = jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
                 else:
-                    yield jax.tree.map(torch.as_tensor, batch)
+                    batch = jax.tree.map(torch.as_tensor, batch)
+                    if self._profile_enabled:
+                        self._latest_profile = BatchProfile(
+                            loader_wait_sec=loader_wait_sec,
+                            to_device_sec=0.0,
+                            fetch_total_sec=loader_wait_sec,
+                        )
+                yield batch
 
 
 def _collate_fn(items):
@@ -515,9 +575,12 @@ class RLDSDataLoader:
         *,
         sharding: jax.sharding.Sharding | None = None,
         num_batches: int | None = None,
+        profile_enabled: bool = False,
     ):
         self._dataset = dataset
         self._num_batches = num_batches
+        self._profile_enabled = profile_enabled
+        self._latest_profile: BatchProfile | None = None
 
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
@@ -532,6 +595,12 @@ class RLDSDataLoader:
         self._sharding = sharding
         self._num_batches = num_batches
 
+    def latest_profile(self) -> BatchProfile | None:
+        return self._latest_profile
+
+    def reset_profile(self) -> None:
+        self._latest_profile = None
+
     def __iter__(self):
         num_items = 0
         while True:
@@ -540,11 +609,30 @@ class RLDSDataLoader:
                 if self._num_batches is not None and num_items >= self._num_batches:
                     return
                 try:
-                    batch = next(data_iter)
+                    if self._profile_enabled:
+                        loader_wait_start = time.perf_counter()
+                        batch = next(data_iter)
+                        loader_wait_sec = time.perf_counter() - loader_wait_start
+                    else:
+                        batch = next(data_iter)
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
-                yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                if self._profile_enabled:
+                    to_device_start = time.perf_counter()
+                    batch = jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    # JAX dispatch is asynchronous, so synchronize only in profiling mode to measure the actual
+                    # host->device / array materialization time instead of the enqueue latency.
+                    batch = jax.block_until_ready(batch)
+                    to_device_sec = time.perf_counter() - to_device_start
+                    self._latest_profile = BatchProfile(
+                        loader_wait_sec=loader_wait_sec,
+                        to_device_sec=to_device_sec,
+                        fetch_total_sec=loader_wait_sec + to_device_sec,
+                    )
+                else:
+                    batch = jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                yield batch
 
 
 class DataLoaderImpl(DataLoader):
@@ -573,3 +661,9 @@ class DataLoaderImpl(DataLoader):
 
     def steps_per_epoch(self) -> int | None:
         return self._steps_per_epoch
+
+    def latest_profile(self) -> BatchProfile | None:
+        return self._data_loader.latest_profile()
+
+    def reset_profile(self) -> None:
+        self._data_loader.reset_profile()
